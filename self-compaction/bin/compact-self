@@ -108,8 +108,14 @@ PY
       if [ "$(bash "$SELF" _status "$n")" != idle ]; then log "not idle for 30 minutes, not compacting"; exit 1; fi
       start=$(date -u +%Y-%m-%dT%H:%M:%S)
       # type in chunks of 100 characters: a long string typed at once was taken as a paste and /compact did not run
-      type_() { local s="$1" i; for ((i=0; i<${#s}; i+=100)); do tmux send-keys -t "$T" -l "${s:i:100}" || return 1; sleep 0.3; done; }
-      type_ "/compact $ins" && sleep 1 && tmux send-keys -t "$T" Enter || { log "ERROR: tmux did not accept the keys"; exit 1; }
+      # "--": a chunk starting with a dash was taken by tmux as an option and typing stopped half way
+      type_() { local s="$1" i; TYPED=0; for ((i=0; i<${#s}; i+=100)); do tmux send-keys -t "$T" -l -- "${s:i:100}" || return 1; TYPED=$((TYPED+1)); sleep 0.3; done; }
+      # after a failure: remove what was typed from the input (Ctrl+U; not Esc, which on an empty input opens the rewind menu)
+      # Claude Code draws a no-break space after "❯", and Ctrl+U removes one visible line of the input
+      has_compact() { tmux capture-pane -p -t "$T" | grep -qE "^❯(.|..)/compact"; }
+      clear_() { local k; for k in $(seq 1 60); do has_compact || break; [ "$(bash "$SELF" _status "$n")" = idle ] || break; tmux send-keys -t "$T" C-u; sleep 0.4; done
+        has_compact && log "ERROR: the input still holds the start of /compact, clear it by hand" || log "input cleared"; }
+      type_ "/compact $ins" && sleep 1 && tmux send-keys -t "$T" Enter || { log "ERROR: tmux did not accept the keys ($TYPED chunks of 100 characters typed)"; clear_; exit 1; }
       log "typed /compact (${#ins} characters of instructions), waiting for the compaction"
       tr_=$(bash "$SELF" _transcript "$n")
       for i in $(seq 1 180); do [ "$(bash "$SELF" _boundary "$tr_" "$start")" = yes ] && break; sleep 5; done
