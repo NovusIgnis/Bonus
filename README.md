@@ -7,6 +7,7 @@ Useful extras from the work of Fundacja Novus Ignis (Poznań, Poland). Small too
 | Folder | What it is |
 | --- | --- |
 | [`decision-forms/`](decision-forms/) | Claude Code: show the decision form after the full reply, count how often the recommended answer is chosen, keep a backlog of unanswered questions. |
+| [`self-compaction/`](self-compaction/) | Claude Code in tmux: a session compacts its own conversation when it decides to, with its own instructions, and then continues by itself. |
 
 The foundation's main work is at [novusignis.org](https://novusignis.org); its public records are in [OmniActa](https://github.com/NovusIgnis/OmniActa).
 
