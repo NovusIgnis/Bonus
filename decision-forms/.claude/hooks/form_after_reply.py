@@ -7,9 +7,14 @@ full. So the session ends its turn with the full message, and this hook makes it
 
 Usage:
   form_after_reply.py request   called by the session during its turn when it has questions for the user
-  form_after_reply.py hook      Stop hook (input JSON on stdin); acts at most once per turn (stop_hook_active)
+  form_after_reply.py hook      Stop hook (input JSON on stdin); acts once per request
+
+Fix 15.11.2026: the hook used to do nothing while stop_hook_active was set. That flag stays true for the whole rest of a
+turn after any Stop hook block (an earlier form, another Stop hook), so a request made in that part of the turn was never
+used and the form did not appear. Now the request file itself prevents loops (it is removed when used), with a 20-second
+pause after the previous block; a request older than 6 hours is dropped without blocking.
 """
-import json, os, subprocess, sys
+import json, os, subprocess, sys, time
 from pathlib import Path
 
 STATE = Path(os.environ.get('CLAUDE_PROJECT_DIR', '.')) / '.claude' / 'form-pending'
@@ -39,9 +44,23 @@ def main():
         except Exception:
             return 0
         flag = STATE / key()
-        if d.get('stop_hook_active') or not flag.exists():
+        if not flag.exists():
             return 0
+        now = time.time()
+        last = STATE / f'.{key()}.blocked'
+        try:
+            if now - flag.stat().st_mtime > 6 * 3600:
+                flag.unlink()
+                return 0
+            if now - last.stat().st_mtime < 20:
+                return 0
+        except OSError:
+            pass
         flag.unlink()
+        try:
+            last.write_text(str(int(now)))
+        except OSError:
+            pass
         print(json.dumps({'decision': 'block', 'reason': (
             'Your full message is now visible to the user. Show the decision form now (AskUserQuestion): the questions from this '
             'turn plus open questions from `form_meter.py backlog <session>`, at most three on the matter plus a fourth one for the '

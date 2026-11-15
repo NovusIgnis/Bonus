@@ -28,7 +28,7 @@ Python 3.9+ and nothing else. Sessions running in `tmux` are told apart by sessi
 
 ## Limits
 
-- The hook makes a session continue once per turn. It cannot loop.
+- The hook makes a session continue once per request: the request file is removed when used, and a second block within 20 seconds is skipped. A request older than 6 hours is dropped. (Until 15.11.2026 the hook skipped the whole rest of a turn after any Stop hook block, so some forms never appeared.)
 - Ending a turn and continuing makes the session look idle for a moment. Tools that wait for an idle session (restarts, messages from other sessions) may act in that moment.
 - The meter only counts what goes through `AskUserQuestion`. Decisions given in plain words are not counted unless a session records them.
 
