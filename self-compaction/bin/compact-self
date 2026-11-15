@@ -112,9 +112,12 @@ PY
       type_() { local s="$1" i; TYPED=0; for ((i=0; i<${#s}; i+=100)); do tmux send-keys -t "$T" -l -- "${s:i:100}" || return 1; TYPED=$((TYPED+1)); sleep 0.3; done; }
       # after a failure: remove what was typed from the input (Ctrl+U; not Esc, which on an empty input opens the rewind menu)
       # Claude Code draws a no-break space after "❯", and Ctrl+U removes one visible line of the input
-      has_compact() { tmux capture-pane -p -t "$T" | grep -qE "^❯(.|..)/compact"; }
+      # state of the input box: subcommand _input below (no-break space after "❯"; a grey suggestion is not typed text)
+      has_compact() { [ "$(bash "$SELF" _input "$n")" = compact ]; }
+      input_empty() { [ "$(bash "$SELF" _input "$n")" = empty ]; }
       clear_() { local k; for k in $(seq 1 60); do has_compact || break; [ "$(bash "$SELF" _status "$n")" = idle ] || break; tmux send-keys -t "$T" C-u; sleep 0.4; done
         has_compact && log "ERROR: the input still holds the start of /compact, clear it by hand" || log "input cleared"; }
+      input_empty || { log "ERROR: the input already holds text (maybe a draft by the user), not typing /compact"; exit 1; }
       type_ "/compact $ins" && sleep 1 && tmux send-keys -t "$T" Enter || { log "ERROR: tmux did not accept the keys ($TYPED chunks of 100 characters typed)"; clear_; exit 1; }
       log "typed /compact (${#ins} characters of instructions), waiting for the compaction"
       tr_=$(bash "$SELF" _transcript "$n")
@@ -127,6 +130,38 @@ PY
     ' _ "$n" "$ins" "$next" "$LOG" "$0" </dev/null >/dev/null 2>&1 &
     echo "$n: compaction scheduled for the end of the turn, then a continuation message (log: $LOG)"
     ;;
+  _input) tmux capture-pane -e -p -t "=${1:-}:" | python3 -I -c 'import re, sys
+lines = [l for l in sys.stdin.read().splitlines() if "❯" in l]
+s = lines[-1] if lines else ""; seen = False
+# keep only text drawn neither dim nor grey: a grey or dim text after the prompt sign is a suggestion, not typed text
+dim = grey = False; out = []
+for part in re.split(r"(\x1b\[[0-9;]*m)", s):
+    m = re.fullmatch(r"\x1b\[([0-9;]*)m", part)
+    if not m:
+        if not seen and "❯" in part: seen = True; part = part.split("❯", 1)[1]
+        elif not seen: continue
+        if not dim and not grey: out.append(part)
+        continue
+    c = [x for x in m.group(1).split(";") if x] or ["0"]
+    i = 0
+    while i < len(c):
+        x = c[i]
+        if x == "0": dim = grey = False
+        elif x == "2": dim = True
+        elif x == "22": dim = False
+        elif x == "39": grey = False
+        elif x in ("90", "37"): grey = True
+        elif x in ("38", "48") and i + 2 < len(c) and c[i + 1] == "5":
+            if x == "38": grey = 232 <= int(c[i + 2]) <= 255 or int(c[i + 2]) in (8, 7)
+            i += 2
+        elif x in ("38", "48") and i + 4 < len(c) and c[i + 1] == "2":
+            if x == "38":
+                r, g, b = (int(v) for v in c[i + 2:i + 5]); grey = abs(r - g) < 16 and abs(g - b) < 16 and 60 < r < 200
+            i += 4
+        elif x.isdigit() and 30 <= int(x) <= 97: grey = False
+        i += 1
+s = "".join(out).replace(" ", " ").strip()
+print("compact" if s.startswith("/compact") else "empty" if not s else "text")' ;;
   _status) info "${1:-}" status ;;
   _transcript) info "${1:-}" transcript ;;
   _boundary) boundary_after "${1:-}" "${2:-}" ;;
