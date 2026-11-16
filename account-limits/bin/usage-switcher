@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+"""Move Claude Code sessions between two accounts when one is close to its usage limits.
+
+Reads the files written by usage-statusline (~/.local/state/account-limits/<account>.json) and a config file
+(~/.config/account-limits.json, or the path in $ACCOUNT_LIMITS_CONFIG):
+
+  {"accounts": {"team": "/home/me/.claude-team", "default": "/home/me/.claude"},
+   "sessions": ["coder", "writer", "research"],          # tmux session names, heaviest first; only these move
+   "flags": {"coder": "--model claude-opus-5-5"},          # optional extra claude flags when resuming
+   "tight": {"five_hour": 85, "seven_day": 90},             # an account is tight at or above either value
+   "spare": {"five_hour": 60, "seven_day": 80},             # an account has room below both values
+   "pause_minutes": 10,
+   "only_to": {"default": "2026-11-27"}}                   # optional: no moves to that account from this date on,
+                                                            # and sessions on it move back one by one
+A window whose reset time has passed counts as 0%. When the account of a session is tight and the other has room, it
+moves ONE session (the first in the list that runs on the tight account) with move-session, then waits at least
+pause_minutes before the next decision. The account a session runs on is read from CLAUDE_CONFIG_DIR of the process in
+its tmux pane. Each decision is appended to ~/.local/state/account-limits/moves.jsonl.
+Usage: usage-switcher [--dry-run]
+
+Written by Claude (Anthropic) for Fundacja Novus Ignis. Apache-2.0.
+"""
+import json, os, subprocess, sys, time
+from datetime import date
+from pathlib import Path
+
+STATE = Path.home() / ".local/state/account-limits"
+CONFIG = Path(os.environ.get("ACCOUNT_LIMITS_CONFIG") or Path.home() / ".config/account-limits.json")
+MOVE = Path(__file__).resolve().parent / "move-session"
+
+
+def usage(acc, now):
+    try:
+        d = json.loads((STATE / f"{acc}.json").read_text())
+    except (OSError, ValueError):
+        return None
+    return {k: 0 if (d.get(k) or {}).get("resets", 0) <= now else (d.get(k) or {}).get("used") or 0
+            for k in ("five_hour", "seven_day")}
+
+
+def account_of(session, accounts):
+    """Account whose config folder the session's claude process uses (default config folder if none is set)."""
+    r = subprocess.run(["tmux", "list-panes", "-t", f"={session}", "-F", "#{pane_pid}"], capture_output=True, text=True)
+    pids = r.stdout.split()[:1]
+    if not pids:
+        return None
+    kids = subprocess.run(["pgrep", "-P", pids[0]], capture_output=True, text=True).stdout.split()
+    cfg = None
+    for p in pids + kids:
+        try:
+            env = Path(f"/proc/{p}/environ").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        for e in env:
+            if e.startswith(b"CLAUDE_CONFIG_DIR="):
+                cfg = e.split(b"=", 1)[1].decode().rstrip("/")
+    cfg = cfg or str(Path.home() / ".claude")
+    return next((a for a, d in accounts.items() if str(Path(d)).rstrip("/") == cfg), None)
+
+
+def main():
+    dry = "--dry-run" in sys.argv
+    c = json.loads(CONFIG.read_text())
+    accounts, order = c["accounts"], c["sessions"]
+    tight_at, spare_below = c.get("tight", {"five_hour": 85, "seven_day": 90}), c.get("spare", {"five_hour": 60, "seven_day": 80})
+    now, today = time.time(), date.today().isoformat()
+    last = STATE / "last-move"
+    if not dry:
+        try:
+            if now - float(last.read_text()) < 60 * c.get("pause_minutes", 10):
+                return 0
+        except (OSError, ValueError):
+            pass
+    u = {a: usage(a, now) for a in accounts}
+    tight = lambda x: x is not None and any(x[k] >= v for k, v in tight_at.items())
+    spare = lambda x: x is not None and all(x[k] < v for k, v in spare_below.items())
+    where = {s: account_of(s, accounts) for s in order}
+    move = None
+    for acc, until in (c.get("only_to") or {}).items():
+        if today >= until:
+            back = [a for a in accounts if a != acc]
+            on = [s for s in order if where.get(s) == acc]
+            if on and back:
+                move = (on[0], back[0], f"{acc} not used from {until}")
+    if not move:
+        for src in accounts:
+            for dst in accounts:
+                closed = today >= (c.get("only_to") or {}).get(dst, "9999")
+                if src != dst and not closed and tight(u[src]) and spare(u[dst]):
+                    on = [s for s in order if where.get(s) == src]
+                    if on:
+                        move = (on[0], dst, f"{src} tight {u[src]}, {dst} has room {u[dst]}")
+                        break
+            if move:
+                break
+    if dry:
+        print(json.dumps({"usage": u, "sessions": where, "move": move}, indent=1))
+        return 0
+    if not move:
+        return 0
+    STATE.mkdir(parents=True, exist_ok=True)
+    last.write_text(str(now))
+    s, dst, why = move
+    r = subprocess.run([str(MOVE), s, accounts[dst], *c.get("flags", {}).get(s, "").split()], capture_output=True, text=True)
+    with open(STATE / "moves.jsonl", "a") as f:
+        f.write(json.dumps({"when": int(now), "session": s, "to": dst, "why": why, "result": r.stdout.strip()[-200:],
+                            "code": r.returncode}) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

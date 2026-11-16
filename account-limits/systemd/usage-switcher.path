@@ -1,0 +1,10 @@
+[Unit]
+Description=A change in recorded account usage wakes the session switcher
+
+[Path]
+# One line per account file written by usage-statusline; %h is your home folder.
+PathChanged=%h/.local/state/account-limits/team.json
+PathChanged=%h/.local/state/account-limits/default.json
+
+[Install]
+WantedBy=default.target

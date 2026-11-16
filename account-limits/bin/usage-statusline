@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""Claude Code status line that records the account's usage limits.
+
+Claude Code passes the status line command a JSON object; for Claude.ai subscriptions it includes `rate_limits` with
+the percentage used of the 5-hour and 7-day windows and their reset times. This script shows them in the status line
+("team · 5h 19% · 7d 57%") and writes them, only when they change, to ~/.local/state/account-limits/<account>.json.
+No conversation content and no tokens are read or written.
+
+The account name is $CLAUDE_ACCOUNT_NAME, or else the name of $CLAUDE_CONFIG_DIR without a leading dot and "claude-"
+(".claude-team" -> "team"), or "default" when Claude Code runs with its default config folder.
+Written only on change, because the status line runs many times a minute in every session and the file may wake a
+systemd path unit (see usage-switcher).
+
+Written by Claude (Anthropic) for Fundacja Novus Ignis. Apache-2.0.
+"""
+import json, os, sys, time
+from pathlib import Path
+
+
+def account():
+    if os.environ.get("CLAUDE_ACCOUNT_NAME"):
+        return os.environ["CLAUDE_ACCOUNT_NAME"]
+    cfg = os.environ.get("CLAUDE_CONFIG_DIR", "").rstrip("/")
+    if not cfg:
+        return "default"
+    name = Path(cfg).name.lstrip(".")
+    return name[len("claude-"):] if name.startswith("claude-") and len(name) > 7 else name
+
+
+try:
+    inp = json.loads(sys.stdin.read() or "{}")
+except ValueError:
+    inp = {}
+acc = "".join(c for c in account() if c.isalnum() or c in "-_") or "default"
+rl = inp.get("rate_limits") or {}
+windows = {k: {"used": rl[k].get("used_percentage"), "resets": rl[k].get("resets_at")}
+           for k in ("five_hour", "seven_day") if isinstance(rl.get(k), dict)}
+folder = Path.home() / ".local/state/account-limits"
+try:
+    old = json.loads((folder / f"{acc}.json").read_text())
+    changed = any(old.get(k) != windows.get(k) for k in ("five_hour", "seven_day"))
+except (OSError, ValueError):
+    changed = True
+if windows and changed:
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        tmp = folder / f".{acc}.{os.getpid()}"
+        tmp.write_text(json.dumps({"account": acc, "when": int(time.time()), **windows}))
+        os.replace(tmp, folder / f"{acc}.json")
+    except OSError:
+        pass
+shown = " · ".join(f"{'5h' if k == 'five_hour' else '7d'} {v['used']:.0f}%" for k, v in windows.items()
+                   if isinstance(v.get("used"), (int, float)))
+print(f"{acc}{' · ' + shown if shown else ''}")

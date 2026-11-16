@@ -1,0 +1,9 @@
+[Unit]
+Description=Move Claude Code sessions between accounts when one is close to its limits
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+# Change the path to where you put the bin folder.
+ExecStart=%h/account-limits/bin/usage-switcher
+TimeoutStartSec=45min
