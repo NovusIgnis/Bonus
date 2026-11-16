@@ -124,7 +124,12 @@ def main():
                                               else f"{span(brk)} since your previous message" if prev else "first message in this conversation")
         out.append(f"Start your reply with one short line, copied exactly: \"{header}\", so the user can see this information arrived. "
                    "Take any other time only from a \"Clock:\" line after a tool call or from `date`, never from an estimate.")
-        write_state(sid, {"start": prev_s["start"] if prev_s else now.isoformat(), "last": now.isoformat(), "header": header})
+        # Header history: a message that arrives while the session is working (from the user or another session) runs this
+        # hook again mid-turn, and a reply begun after the first message carries the older line; the Stop hook accepts any
+        # header given since the turn began.
+        headers = ((prev_s or {}).get("headers") or [])[-11:] + [{"h": header, "t": now.isoformat()}]
+        write_state(sid, {"start": prev_s["start"] if prev_s else now.isoformat(), "last": now.isoformat(), "header": header,
+                          "headers": headers})
     sys.stdout.reconfigure(encoding="utf-8")
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "\n".join(out)}}, ensure_ascii=False))
 

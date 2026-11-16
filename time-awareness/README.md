@@ -14,8 +14,8 @@ Three small hooks for [Claude Code](https://claude.com/claude-code) that give a 
 | File | Event | What it does |
 | --- | --- | --- |
 | `.claude/hooks/clock_on_prompt.py` | UserPromptSubmit | With every user message: current date and time, time since the user's previous message and since the session's own last entry, and the exact header line the reply must start with, e.g. `Sun 15.11 · 11:43 · 4 min since my last reply`. |
-| `.claude/hooks/clock_after_tool.py` | PostToolUse | After a tool call, at most once a minute: `Clock: Sun 15.11, 11:45:24`. Sessions that work for an hour between messages then take times from the clock instead of estimating. |
-| `.claude/hooks/header_check.py` | Stop (optional) | Checks that the reply starts with that header line; if not, asks once for a one-line correction. |
+| `.claude/hooks/clock_after_tool.py` | PostToolUse | After a tool call, at most once a minute: `Clock: Sun 15.11, 11:45:24`. Sessions that work for an hour between messages then take times from the clock instead of estimating. After a decision form (AskUserQuestion) that waited 3 minutes or more it gives a new header line, e.g. `Tue 17.11 · 09:12 · form answer after 2 h 5 min`, because a form answer does not run the prompt hook. |
+| `.claude/hooks/header_check.py` | Stop (optional) | Checks that the reply starts with a header line given since the turn began; if not, asks once for a one-line correction. |
 | `.claude/settings.example.json` | | Hook configuration to merge into your `.claude/settings.json`. |
 
 The break counts from the later of two moments, the user's previous message or the session's own last entry, so an hour of the session's work on a task is not counted as a break.
@@ -35,6 +35,8 @@ Python 3.9+ and nothing else. For non-interactive runs (`claude -p` from a sched
 - The header check reads the conversation record (`transcript_path`), which can lag behind the reply; the hook waits up to 4 seconds and otherwise lets the reply through rather than block it without reason.
 - The header shows the day as well as the time, because in long threads the user wanted to see which day a reply came from.
 - Times are in the computer's local time zone.
+- A message that arrives while the session is working (from the user, or from another session) runs the prompt hook again in the middle of the turn and gives a newer header. At first the check accepted only the newest one, so a reply begun after the first message was asked for a needless correction; the user saw this several times in one night (17.11.2026). The state now keeps the last 12 headers per session, and the check accepts any header given since the turn began, while a header from an earlier turn is still caught.
+- A decision form can wait for hours. Before 16.11.2026 the check then demanded the header from before the form, so the user saw a reply dated hours earlier than their answer.
 
 ## License
 
