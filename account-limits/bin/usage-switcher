@@ -58,6 +58,21 @@ def account_of(session, accounts):
     return next((a for a, d in accounts.items() if str(Path(d)).rstrip("/") == cfg), None)
 
 
+def idle_sessions(accounts):
+    """tmux sessions whose Claude Code reports status "idle" right now (sessions/*.json in each config folder)."""
+    idle = set()
+    for d in set(accounts.values()):
+        for p in (Path(d).expanduser() / "sessions").glob("*.json"):
+            try:
+                j = json.loads(p.read_text())
+                os.kill(int(j["pid"]), 0)
+                if j.get("status") == "idle":
+                    idle.add(str(j.get("tmux") or "").split(":", 1)[0])
+            except Exception:
+                continue
+    return idle
+
+
 def main():
     dry = "--dry-run" in sys.argv
     c = json.loads(CONFIG.read_text())
@@ -75,6 +90,9 @@ def main():
     tight = lambda x: x is not None and any(x[k] >= v for k, v in tight_at.items())
     spare = lambda x: x is not None and all(x[k] < v for k, v in spare_below.items())
     where = {s: account_of(s, accounts) for s in order}
+    # idle sessions first, so the switcher does not wait on a busy one while an idle one could move
+    idle = idle_sessions(accounts)
+    order = [s for s in order if s in idle] + [s for s in order if s not in idle]
     move = None
     for acc, until in (c.get("only_to") or {}).items():
         if today >= until:

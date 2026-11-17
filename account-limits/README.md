@@ -31,7 +31,7 @@ Linux, tmux, Python 3.9+ and systemd (for the units). The switcher only moves se
 - An account that no session uses sends no new readings. The switcher therefore counts a window whose reset time has passed as 0%.
 - A session that moves to another account loses whatever belongs to the first account. For us that was artifacts shared inside the organization (a shared database answered "no such artifact … or no access") and the organization's connectors and plugins. We keep the sessions that need them on the team account by leaving them out of the list.
 - Remote Control works after a move, but the session gets a new address and shows up in the app of the account it moved to.
-- A session is moved only when idle, so a move can wait up to 30 minutes. A session that is never idle is never moved.
+- A session is moved only when idle, so a move can wait up to 30 minutes. A session that is never idle is never moved. The switcher tries sessions that are idle right now first, in the configured order, and only then busy ones.
 
 ## License
 
