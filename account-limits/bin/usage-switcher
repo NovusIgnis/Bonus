@@ -15,7 +15,10 @@ Reads the files written by usage-statusline (~/.local/state/account-limits/<acco
 A window whose reset time has passed counts as 0%. When the account of a session is tight and the other has room, it
 moves ONE session (the first in the list that runs on the tight account) with move-session, then waits at least
 pause_minutes before the next decision. The account a session runs on is read from CLAUDE_CONFIG_DIR of the process in
-its tmux pane. Each decision is appended to ~/.local/state/account-limits/moves.jsonl.
+its tmux pane. A session is never moved to an account where the separate weekly limit of its own model (for example
+"Fable only") is at 95% or more; those limits come from usage-statusline or, since Claude Code does not pass them yet,
+from ~/.local/state/account-limits/models-manual.json, e.g. {"team": {"Fable": {"used": 100, "resets": 1794916800}}}.
+Each decision is appended to ~/.local/state/account-limits/moves.jsonl.
 Usage: usage-switcher [--dry-run]
 
 Written by Claude (Anthropic) for Fundacja Novus Ignis. Apache-2.0.
@@ -36,6 +39,23 @@ def usage(acc, now):
         return None
     return {k: 0 if (d.get(k) or {}).get("resets", 0) <= now else (d.get(k) or {}).get("used") or 0
             for k in ("five_hour", "seven_day")}
+
+
+def model_exhausted(session, acc, now, at=95):
+    """True when the session's model has its own weekly limit on account acc at or above `at` percent."""
+    try:
+        model = (STATE / "model" / session).read_text().strip().lower()
+    except OSError:
+        return False
+    limits = {}
+    for f, pick in ((STATE / f"{acc}.json", lambda d: d.get("models") or {}),
+                    (STATE / "models-manual.json", lambda d: d.get(acc) or {})):
+        try:
+            limits.update(pick(json.loads(f.read_text())))
+        except (OSError, ValueError, AttributeError):
+            pass
+    return any(model.startswith(name.lower()) and isinstance(v, dict) and (v.get("resets") or 0) > now
+               and (v.get("used") or 0) >= at for name, v in limits.items())
 
 
 def account_of(session, accounts):
@@ -105,7 +125,7 @@ def main():
             for dst in accounts:
                 closed = today >= (c.get("only_to") or {}).get(dst, "9999")
                 if src != dst and not closed and tight(u[src]) and spare(u[dst]):
-                    on = [s for s in order if where.get(s) == src]
+                    on = [s for s in order if where.get(s) == src and not model_exhausted(s, dst, now)]
                     if on:
                         move = (on[0], dst, f"{src} tight {u[src]}, {dst} has room {u[dst]}")
                         break

@@ -6,6 +6,12 @@ the percentage used of the 5-hour and 7-day windows and their reset times. This 
 ("team · 5h 19% · 7d 57%") and writes them, only when they change, to ~/.local/state/account-limits/<account>.json.
 No conversation content and no tokens are read or written.
 
+Per-model weekly limits (for example a separate "Fable only" limit) are recorded under "models" when Claude Code
+passes them (rate_limits.limits rows of kind "weekly_scoped"); as of version 2.1.326 it does not, so they can also be
+entered by hand in ~/.local/state/account-limits/models-manual.json (see usage-switcher). The model of each tmux
+session is written to ~/.local/state/account-limits/model/<session>, so the switcher can tell which sessions a
+model limit concerns.
+
 The account name is $CLAUDE_ACCOUNT_NAME, or else the name of $CLAUDE_CONFIG_DIR without a leading dot and "claude-"
 (".claude-team" -> "team"), or "default" when Claude Code runs with its default config folder.
 Written only on change, because the status line runs many times a minute in every session and the file may wake a
@@ -13,7 +19,8 @@ systemd path unit (see usage-switcher).
 
 Written by Claude (Anthropic) for Fundacja Novus Ignis. Apache-2.0.
 """
-import json, os, sys, time
+import json, os, subprocess, sys, time
+from datetime import datetime
 from pathlib import Path
 
 
@@ -35,10 +42,22 @@ acc = "".join(c for c in account() if c.isalnum() or c in "-_") or "default"
 rl = inp.get("rate_limits") or {}
 windows = {k: {"used": rl[k].get("used_percentage"), "resets": rl[k].get("resets_at")}
            for k in ("five_hour", "seven_day") if isinstance(rl.get(k), dict)}
+models = {}
+for row in rl.get("limits") if isinstance(rl.get("limits"), list) else []:
+    try:
+        name = ((row.get("scope") or {}).get("model") or {}).get("display_name")
+        if row.get("kind") == "weekly_scoped" and name:
+            at = row.get("resets_at")
+            models[str(name)[:40]] = {"used": row.get("percent"),
+                                      "resets": int(datetime.fromisoformat(at.replace("Z", "+00:00")).timestamp()) if at else None}
+    except Exception:
+        continue
+if models:
+    windows["models"] = models
 folder = Path.home() / ".local/state/account-limits"
 try:
     old = json.loads((folder / f"{acc}.json").read_text())
-    changed = any(old.get(k) != windows.get(k) for k in ("five_hour", "seven_day"))
+    changed = any(old.get(k) != windows.get(k) for k in ("five_hour", "seven_day", "models"))
 except (OSError, ValueError):
     changed = True
 if windows and changed:
@@ -49,6 +68,19 @@ if windows and changed:
         os.replace(tmp, folder / f"{acc}.json")
     except OSError:
         pass
+if os.environ.get("TMUX_PANE"):
+    try:
+        sess = subprocess.run(["tmux", "display-message", "-p", "-t", os.environ["TMUX_PANE"], "#S"],
+                              capture_output=True, text=True, timeout=2).stdout.strip()
+        model = str((inp.get("model") or {}).get("display_name") or "")[:40]
+        f = folder / "model" / "".join(c for c in sess if c.isalnum() or c in "-_")
+        if sess and model and (not f.exists() or f.read_text() != model):
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(model)
+    except Exception:
+        pass
 shown = " · ".join(f"{'5h' if k == 'five_hour' else '7d'} {v['used']:.0f}%" for k, v in windows.items()
-                   if isinstance(v.get("used"), (int, float)))
+                   if k != "models" and isinstance(v.get("used"), (int, float)))
+shown += "".join(f" · {n} {v['used']:.0f}%" for n, v in (windows.get("models") or {}).items()
+                 if isinstance(v.get("used"), (int, float)))
 print(f"{acc}{' · ' + shown if shown else ''}")
